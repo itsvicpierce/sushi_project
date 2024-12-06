@@ -1,0 +1,323 @@
+---
+title: "Yamazaru Menu: Exploring the Data of (My Favorite) Sushi"
+author: "Victoria Pierce Crossland"
+date: "2024-011-29"
+output: html_document
+---
+
+#About Me + Addiditonal Context:
+# I am a sushi lover that struggles to decide on what to order and happens to have skills in web-scraping, data-manipulatuion and analyisis. I definitey have some favorite sushi roll ingredients (love mango and jalapeño) as well as some I avoid (anything deep fried). If only I had an easy way to filter for my preferences without skimming over the menu over and over.. Oh wait.. Let's create it (then take it a step further.)
+
+```{r, include=F}
+if(!is.element('dplyr', installed.packages()[,1])){install.packages('tidyverse',dependencies = T)}
+if(!is.element('gt', installed.packages()[,1])){install.packages('rvest',dependencies = T)}
+if(!is.element('gtsummary', installed.packages()[,1])){install.packages('gt',dependencies = T)}
+if(!is.element('forcats', installed.packages()[,1])){install.packages('forcats',dependencies = T)}
+if(!is.element('ggplot2', installed.packages()[,1])){install.packages('ggplot2',dependencies = T)}
+if(!is.element('rmdformats', installed.packages()[,1])){install.packages('rmdformats',dependencies = T)}
+
+library(tidyverse)
+library(rvest)
+```
+##Initial Data Scrape and Dataset Creation 
+```{r}
+#Load my favorite sushi menu
+link <- "https://yamazarusouthend.com/charlotte-yamazaru-food-menu"
+menu <- read_html(link)
+
+#Grab HTML elements
+menuitems <- menu %>% html_elements("h3") %>%
+  html_text2()
+
+descrip<- menu %>% html_elements(".food-item-description") %>%
+  html_text()
+
+menusection<- menu %>% html_elements("h2") %>%
+  html_text()
+
+price<- menu %>% html_elements(".food-price") %>%
+  html_text()
+
+#Combining and formatting
+(vpmenu <- cbind(menuitems, descrip, price))
+
+menusection2 <- c(rep("Appetizers", 33), 
+                  rep("Salads", 10), 
+                  rep("Ramen", 3), 
+                  rep("Fried Rice", 5), 
+                  rep("Soup", 3), 
+                  rep("Rice Bowl", 5), 
+                  rep("Side Items", 5), 
+                  rep("Yakisoba", 4), 
+                  rep("Sushi Rice Bowl", 4),
+                  rep("Nigiri", 20),
+                  rep("Classic Maki", 5),
+                  rep("Moriawase", 6), 
+                  rep("American Classic Roll", 11),
+                  rep("Specialty Roll", 30),
+                  rep("Dessert", 4))
+
+cbind(menusection2, vpmenu)-> vpmenu
+
+vpmenu <- as.data.frame(vpmenu) %>% 
+  mutate(descrip= ifelse(descrip== "", menuitems, descrip),
+         descrip= str_to_title(descrip))
+
+#New Variable that Distinguishes by Protein
+vpmenu %>% 
+  mutate(Contains= case_when(
+    (str_detect(descrip, "Crab|Tuna|Salmon|Sash|Octopus|Yellowtail|Calamari|Shima|Urchin|Tekka|Sake|Negi|Scorpion|Pcs|Squid|Eel|Ikura|Hamachi|Roe|Fish|Mackerel|Clam|Conch|Snapper|Shrimp|Scallops|Seafood")~ "Seafood"),
+    str_detect(descrip, "Chicken")~ "Chicken",
+    str_detect(descrip, "Beef")~ "Beef",
+    str_detect(descrip, "Pork")~ "Pork",
+    str_detect(descrip, "Tofu")~ "Tofu",
+    str_detect(menuitems, "Roll")~ "Seafood",
+    TRUE~ "Veggie")) %>% 
+  mutate(Any_Raw_Items= case_when(
+    (str_detect(menuitems, "[*]")~ "Contains Raw or Undercooked Items"),
+    TRUE~ "Fully cooked items only"))->vpmenu
+
+#Double Checking Items Assigned Veggie
+print(unique(vpmenu %>%
+      filter(Contains == "Veggie") %>%
+      pull(menuitems)))
+
+
+#Separating item description into ingredient columns
+vpmenu %>% 
+  separate(descrip, into= c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"),
+           sep=",|With|Over|And|/|[|]") -> vpmenu
+
+#Pivoting longer for tidy df
+vpmenu %>% 
+  pivot_longer(!menusection2 & !menuitems & !price & !Contains & !Any_Raw_Items , 
+               names_to= "IngredientNum", 
+               values_to = "Ingredients") %>% 
+  mutate(Ingredients= str_replace(Ingredients, "[.]", ""),
+         Ingredients=str_replace(Ingredients, " *", ""),
+         Ingredients= str_to_title(Ingredients),
+         Ingredients= str_replace(Ingredients, "Dessing", "Dressing"),
+         price= as.numeric(str_remove(price, "[$]")))->vpmenu
+
+
+#Manually Fixing Typos
+vpmenu %>% 
+  mutate(Ingredients= case_when(
+    menuitems == "Chef's Choice Sashimi*" & IngredientNum== "1" ~ "8 Pcs Sashimi*",
+    menuitems == "Chef's Choice Sashimi*" & IngredientNum== "2" ~ "12 Pcs Sashimi*",
+    menuitems == "Chef's Choice Sashimi*" & IngredientNum== "3" ~ "16 Pcs Sashimi*",
+    menuitems == "Chef's Choice Sashimi*" & IngredientNum== "4" ~ "20 Pcs Sashimi*",
+    menuitems == "Cream Cheese Dip" & IngredientNum== "1" ~ "Crab Sticks",
+    menuitems == "Cream Cheese Dip" & IngredientNum== "2" ~ "Cream Cheese",
+    menuitems == "Cream Cheese Dip" & IngredientNum== "3" ~ "Green Onion",
+    menuitems == "Cream Cheese Dip" & IngredientNum== "4" ~ "Deep Fried Wanton Skin",
+    TRUE ~ vpmenu$Ingredients)) %>% 
+      mutate(price= case_when(
+        menuitems == "Chef's Choice Sashimi*" & IngredientNum== "1" ~ 18.00,
+        menuitems == "Chef's Choice Sashimi*" & IngredientNum== "2" ~ 22.00,
+        menuitems == "Chef's Choice Sashimi*" & IngredientNum== "3" ~ 28.00,
+        menuitems == "Chef's Choice Sashimi*" & IngredientNum== "4" ~ 35.00,
+        menuitems == "Cream Cheese Dip" ~ 6.50,
+        TRUE~ vpmenu$price))-> vpmenu
+
+#Dropping NAs for Tidy DF
+vpmenu %>% 
+  drop_na(Ingredients)->vpmenutidy
+
+vpmenutidy %>% 
+  mutate(menuitems= str_replace_all(menuitems, "\\*", ""))->vpmenutidy
+
+
+##Edits to match Uber Eats Dataset below
+vpmenutidy %>% 
+  mutate(menuitems= case_when(
+    menuitems == "A"~ "A 5 Nigiri-Tuna Roll",
+     menuitems == "B"~ "B 8 Nigiri-Shrimp Tempura Roll",
+     menuitems == "C"~ "C 6 Nigiri-6 Sashimi & 1 Spider Roll",
+      menuitems == "D"~ "D 12 Nigiri-Scorpion Roll",
+       menuitems == "E"~ "E 10 Nigiri-Tuna Avocado Roll & Kiss Of Fire Roll",
+       menuitems == "F"~ "F 8 Nigiri-8 Sashimi & 3 Kingdom Rolls",
+        TRUE~ vpmenutidy$menuitems))->vpmenutidy
+       
+
+```
+
+```{r}
+library(writexl)
+write_xlsx(vpmenutidy, "SushiMenu.xlsx")
+```
+
+
+# Uber Eats Ratings
+## This is where things started to go wrong.. 
+```{r}
+library(tidyverse)
+library(stringr)
+library(rvest)
+
+uber_eats_url= "https://www.ubereats.com/store/yamazaru/rYvdCPBHTB-n69iSWsmlHQ?diningMode=DELIVERY&ps=1&sc=SEARCH_SUGGESTION"
+
+uber_eats <- read_html(uber_eats_url)
+
+#Half of Data Coming Through
+menu_uber_eats <- uber_eats %>% html_elements("li") %>%
+  html_text()
+
+#Maybe this Way? No
+menu_uber_eats <- uber_eats %>%
+  html_elements("span[data-testid='rich-text']") %>%
+  html_text(trim = TRUE)
+```
+
+
+
+##Only part of the menu comes through with Rvest. This challenged me for what felt like forever and researching other packages to resolve the possible issue of Lazy Loading was unsuccessful. Moving onto next idea.
+#Initally attempted to use Rselenium package 
+#Try to download as PDF and scrape?
+```{r}
+library(pdftools)
+library(pdftables)
+
+yamazaru <- pdf_text("Yama_menu.pdf")
+
+yamazaru <- as.data.frame(yamazaru)
+
+#Wow - This is messy. Let's break it up.
+yamazaru %>% 
+  separate_rows(yamazaru, sep="                     ") %>% 
+  drop_na() -> yama_sep
+
+yama_sep[76:809,1]->trimmed_menu
+
+
+trimmed_menu %>%
+  separate(yamazaru, c("name", "split"), '•') %>% 
+  separate(split, c("perc_liked", "num_votes"), '%')->trimmed_menu
+
+subset <- trimmed_menu[3:734,] %>% 
+  select(perc_liked, num_votes)
+
+trimmed_menu[1:732,] %>% 
+  select(name) %>% 
+  cbind(subset) %>% 
+  drop_na()->uber_eats_menu
+
+
+
+
+uber_eats_menu %>% 
+  mutate(name = str_to_title(trimws(name)),
+         perc_liked = trimws(perc_liked),
+         num_votes = trimws(num_votes),
+         num_votes = str_replace_all(num_votes, "[^[:alnum:]]", ""))->uber_eats_menu
+
+uber_eats_menu$num_votes <- as.numeric(uber_eats_menu$num_votes)
+uber_eats_menu$perc_liked <- as.numeric(uber_eats_menu$perc_liked)
+
+
+
+write_csv(uber_eats_menu, "uber_eats_menu.csv")
+write_xlsx(uber_eats_menu, "uber_eats_menu.xlsx")
+  
+```
+
+
+
+
+```{r}
+menu_uber_eats <- read_csv("Downloads/menu_uber_eats.csv")
+
+menu_uber_eats %>% 
+  separate(`menu_uber_eats[4:26, ]`, c("columna", "columnb"), '•')->menu_uber_eats
+
+menu_uber_eats %>% 
+  mutate(columna = str_sub(menu_uber_eats$columna, end = -7))->menu_uber_eats
+menu_uber_eats %>% 
+  drop_na() -> menu_uber_eats
+
+menu_uber_eats[18, 1]<- "Gladiator"
+menu_uber_eats[19, 1]<- "Volcano"
+menu_uber_eats[20, 1]<- "Kiss of Fire"
+
+menu_uber_eats <- menu_uber_eats[-c(6), ] 
+
+number_of_votes <- (str_extract_all(menu_uber_eats, "\\([^()]+\\)")[[2]])
+number_of_votes <- as.data.frame(substring(number_of_votes, 2, nchar(number_of_votes)-1))
+
+menu_uber_eats %>% 
+  cbind(number_of_votes) -> menu_uber_eats
+
+
+colnames(menu_uber_eats) <- c("menu_item", "remove_later", "num_votes")
+
+
+menu_uber_eats$remove_later %>% 
+  substr(1, 4) -> percent_ranked
+
+
+percent_ranked<- as.data.frame(percent_ranked)
+
+menu_uber_eats %>% 
+  cbind(percent_ranked) -> menu_uber_eats
+
+menu_uber_eats %>% 
+  select(menu_item, num_votes, percent_ranked) -> menu_uber_eats
+
+```
+
+
+
+#Fuzzy Match Yamazaru and Uber Eats Yamazaru
+```{r}
+library(fuzzyjoin)
+library(writexl)
+
+#Joining Yamazaru Menu with Uber Eats Data
+vpmenutidy %>% 
+  stringdist_left_join(uber_eats_menu,
+                       by = c(menuitems = "name"),
+                       method= "jw",
+                       max_dist= .2,
+                       distance_col= "dist")%>%
+  group_by(menuitems) %>%
+  slice_min(order_by=dist, n=1) -> fuzzy_matched
+
+stringdist_left_join
+
+#Yamazaru has 145 unique items on their menu
+length(unique(vpmenutidy$menuitems))
+(unique(vpmenutidy$menuitems))
+
+#Uber Eats only has 118 options
+length(unique(uber_eats_menu$name))
+
+
+fuzzy_matched %>% 
+  rbind(vpmenutidy) %>% 
+  distinct(menuitems, Ingredients, .keep_all = TRUE) -> joined_data
+
+
+#Stringing all case when together
+joined_data %>% 
+  mutate(menuitems = 
+           case_when(menusection2 %in% c("Yakisoba", "Soup", "Nigiri", "Fried Rice", "Ramen") ~ paste(menuitems, menusection2, sep= " "), 
+                     menusection2 %in% c("Specialty Roll") ~ paste(menuitems, "Roll"),
+                     TRUE ~ menuitems))-> almost_final
+
+#Fixing some Typos
+almost_final %>% 
+  mutate(menuitems = case_when(menuitems == "Sambal Hand Roll Roll" ~ "Sambal Hand Roll",
+        menuitems == "Negi Toro with Ikura Hand Roll Roll" ~ "Negi Toro with Ikura Hand Roll",
+        menuitems == "Saru Hand Roll Roll" ~ "Saru Hand Roll",
+         menuitems == "Grinch" ~ "Grinch Roll",
+                     TRUE ~ menuitems)) %>% 
+  select(menusection2:Ingredients, perc_liked, num_votes)->final_sushi_data
+
+final_sushi_data[is.na(final_sushi_data)]<- 0
+
+write_csv(final_sushi_data, "final_sushi_data.csv")
+write_xlsx(uber_eats_menu, "final_sushi_data.xlsx")
+
+```
+
+# I now have create a tidy data set of Yamazaru's menu with rating info from Uber Eats. My next project: Let's throw this into a dashboard to create an interactive tool to choose your sushi rolls. 
